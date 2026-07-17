@@ -287,21 +287,59 @@ class XBloomCloudClient:
         return {"memberId": int(member_id), "token": str(token)}
 
     # -- recipes ------------------------------------------------------------ #
-    async def list_recipes(self, member_id: int, token: str) -> list[Recipe]:
-        """Return the logged-in user's recipe library, parsed to Recipe dicts."""
+    async def _list_endpoint(
+        self, endpoint: str, member_id: int, token: str, *, action: str
+    ) -> list[Recipe]:
+        """POST a recipe-list endpoint and parse ``resp["list"]`` to Recipes."""
         payload = self._auth_body(
             member_id, token,
             pageNumber=1, countPerPage=100, adaptedModel=1,
         )
-        resp = await self._post_encrypted("tuMyTeaRecipeCreated.tuhtml", payload)
-        _raise_for_result(resp, "list recipes")
-        recipes: list[Recipe] = []
+        resp = await self._post_encrypted(endpoint, payload)
+        _raise_for_result(resp, action)
+        out: list[Recipe] = []
         for raw in resp.get("list") or []:
             try:
-                recipes.append(_parse_recipe(raw))
+                out.append(_parse_recipe(raw))
             except (KeyError, TypeError, ValueError) as err:
                 log.warning("skipping unparseable cloud recipe %s: %s",
                             raw.get("tableId") if isinstance(raw, dict) else raw, err)
+        return out
+
+    async def list_recipes(self, member_id: int, token: str) -> list[Recipe]:
+        """Return the user's full recipe library: created + downloaded (shared).
+
+        The xBloom app splits these into "My Recipes" (``tuMyTeaRecipeCreated``)
+        and "Shared Recipes" (``tuMyRecipeShared`` — recipes you saved from a
+        share link). Confirmed against a live account: both are owned by the
+        member (``creatorId`` == you) and fully editable, and the two lists are
+        disjoint; a shared recipe only differs by carrying a ``resourceTableId``
+        back to its origin. HA merges them into one library and tags the shared
+        ones ``shared=True`` so a dashboard can group them, with no special edit
+        handling. The product/discover catalog (``tuMyRecipeProduct``, 100+
+        curated recipes not owned by the user) is deliberately excluded.
+        """
+        recipes = await self._list_endpoint(
+            "tuMyTeaRecipeCreated.tuhtml", member_id, token, action="list recipes"
+        )
+        seen = {r["id"] for r in recipes}
+        try:
+            shared = await self._list_endpoint(
+                "tuMyRecipeShared.tuhtml", member_id, token,
+                action="list shared recipes",
+            )
+        except XBloomAuthError:
+            raise  # let the session re-login; the created list already worked
+        except (XBloomAPIError, aiohttp.ClientError) as err:
+            log.warning(
+                "xbloom cloud: shared recipe list failed (%s) — omitting", err
+            )
+            shared = []
+        for recipe in shared:
+            if recipe["id"] in seen:
+                continue
+            recipe["shared"] = True
+            recipes.append(recipe)
         return recipes
 
     async def create_recipe(

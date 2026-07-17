@@ -226,6 +226,72 @@ def test_session_hard_auth_error_propagates_without_relogin():
     assert client.login_calls == 0
 
 
+# --------------------------------------------------------------------------- #
+# list_recipes merges created + shared, tags shared, excludes catalog          #
+# --------------------------------------------------------------------------- #
+def _raw_recipe(table_id, name, *, shared=False):
+    r = {
+        "tableId": table_id, "theName": name, "dose": 18.0, "grandWater": 16.0,
+        "grinderSize": 40.0, "isSetGrinderSize": 1, "rpm": 90, "pourCount": 1,
+        "pourList": [], "cupType": 2, "cupTypeName": "Omni",
+        "createTimeStamp": 1700000000000, "creatorId": 18812,
+    }
+    if shared:
+        r["resourceTableId"] = 999000 + table_id  # origin pointer
+    return r
+
+
+def test_list_recipes_merges_created_and_shared():
+    from xbloom.cloud import XBloomCloudClient
+
+    responses = {
+        "tuMyTeaRecipeCreated.tuhtml": {
+            "result": "success",
+            "list": [_raw_recipe(1, "Created A"), _raw_recipe(2, "Created B")],
+        },
+        "tuMyRecipeShared.tuhtml": {
+            "result": "success",
+            "list": [_raw_recipe(50, "Shared X", shared=True)],
+        },
+    }
+    calls = []
+
+    async def fake_post(endpoint, payload):
+        calls.append(endpoint)
+        return responses[endpoint]
+
+    client = XBloomCloudClient(session=None)
+    client._post_encrypted = fake_post  # type: ignore[method-assign]
+
+    recipes = asyncio.run(client.list_recipes(18812, "tok"))
+
+    names = {r["name"] for r in recipes}
+    assert names == {"Created A", "Created B", "Shared X"}
+    shared = [r for r in recipes if r.get("shared")]
+    assert [r["name"] for r in shared] == ["Shared X"]
+    # Created recipes are not tagged shared.
+    assert all(not r.get("shared") for r in recipes if r["name"].startswith("Created"))
+    # The product/discover catalog is never fetched.
+    assert "tuMyRecipeProduct.tuhtml" not in calls
+    assert set(calls) == {"tuMyTeaRecipeCreated.tuhtml", "tuMyRecipeShared.tuhtml"}
+
+
+def test_list_recipes_survives_shared_endpoint_failure():
+    from xbloom.cloud import XBloomAPIError, XBloomCloudClient
+
+    async def fake_post(endpoint, payload):
+        if endpoint == "tuMyTeaRecipeCreated.tuhtml":
+            return {"result": "success", "list": [_raw_recipe(1, "Created A")]}
+        raise XBloomAPIError("shared list boom")
+
+    client = XBloomCloudClient(session=None)
+    client._post_encrypted = fake_post  # type: ignore[method-assign]
+
+    recipes = asyncio.run(client.list_recipes(18812, "tok"))
+    # Created recipes still returned even though the shared list failed.
+    assert [r["name"] for r in recipes] == ["Created A"]
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
