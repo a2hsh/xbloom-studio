@@ -14,7 +14,8 @@ CONF_BLE_NAME = "ble_name"      # advertised BLE name (e.g. "XBLOOM ABC123")
 # `cloud` sub-dict in entry.data so a logged-out entry has no cloud key at all.
 CONF_CLOUD = "cloud"
 CONF_CLOUD_EMAIL = "email"         # account email (also used for re-login)
-CONF_CLOUD_PASSWORD = "password"   # stored for seamless re-login on token expiry
+CONF_CLOUD_PASSWORD = "password"   # stored ONLY if the user opts in (remember)
 CONF_CLOUD_MEMBER_ID = "member_id"  # member.tableId from the login response
 CONF_CLOUD_TOKEN = "token"          # session token for the recipe API
+CONF_CLOUD_REMEMBER = "remember"    # whether the password is stored for auto-refresh
 

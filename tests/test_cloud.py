@@ -193,6 +193,23 @@ def test_session_no_relogin_when_not_expired():
     assert seen == {}
 
 
+def test_session_without_password_reraises_on_expiry():
+    # User chose not to store the password → session can't refresh; the expiry
+    # must propagate (expired=True) so the integration can prompt a re-login.
+    client = _FakeClient(expire_first=True)
+    sess = XBloomCloudSession(
+        client, email="a@b.c", password=None, member_id=1, token="old",
+        on_token_refreshed=None,
+    )
+    try:
+        asyncio.run(sess.list_recipes())
+    except XBloomAuthError as err:
+        assert err.expired
+    else:  # pragma: no cover
+        raise AssertionError("expected XBloomAuthError on expiry")
+    assert client.login_calls == 0  # never attempted a doomed login
+
+
 def test_session_hard_auth_error_propagates_without_relogin():
     client = _FakeClient(expire_first=False)
 

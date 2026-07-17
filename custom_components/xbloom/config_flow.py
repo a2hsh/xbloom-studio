@@ -26,7 +26,17 @@ from homeassistant.components.bluetooth import (
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
-from .const import CONF_BLE_NAME, CONF_PRODUCT_ID, DOMAIN
+from .const import (
+    CONF_BLE_NAME,
+    CONF_CLOUD,
+    CONF_CLOUD_EMAIL,
+    CONF_CLOUD_MEMBER_ID,
+    CONF_CLOUD_PASSWORD,
+    CONF_CLOUD_REMEMBER,
+    CONF_CLOUD_TOKEN,
+    CONF_PRODUCT_ID,
+    DOMAIN,
+)
 from .vendor.xbloom import spec
 from .vendor.xbloom.recipe_validate import (
     VOLUME_TOLERANCE_ML,
@@ -144,6 +154,74 @@ class XBloomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     # ------------------------------------------------------------------ #
+    # Reauth — the stored session token is no longer valid and cannot be  #
+    # refreshed (password not remembered, or the credentials changed).    #
+    # ------------------------------------------------------------------ #
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> FlowResult:
+        """Entry point when HA requests re-authentication for this entry."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Prompt for the password again and mint a fresh session token."""
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        from .vendor.xbloom.cloud import XBloomCloudClient
+        from .vendor.xbloom.exceptions import XBloomAPIError
+
+        entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        existing = (entry.data.get(CONF_CLOUD) or {}) if entry else {}
+        email = existing.get(CONF_CLOUD_EMAIL, "")
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            password = user_input.get("password") or ""
+            remember = bool(user_input.get("remember", True))
+            if not password:
+                errors["base"] = "credentials_required"
+            else:
+                client = XBloomCloudClient(async_get_clientsession(self.hass))
+                try:
+                    creds = await client.login(email, password)
+                except XBloomAPIError as err:
+                    _LOGGER.warning("xbloom cloud reauth failed: %s", err)
+                    errors["base"] = "cloud_login_failed"
+                else:
+                    new_cloud = {
+                        CONF_CLOUD_EMAIL: email,
+                        CONF_CLOUD_MEMBER_ID: creds["memberId"],
+                        CONF_CLOUD_TOKEN: creds["token"],
+                        CONF_CLOUD_REMEMBER: remember,
+                    }
+                    if remember:
+                        new_cloud[CONF_CLOUD_PASSWORD] = password
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, CONF_CLOUD: new_cloud}
+                    )
+                    await self.hass.config_entries.async_reload(entry.entry_id)
+                    return self.async_abort(reason="reauth_successful")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({
+                vol.Required("password"): selector.TextSelector(
+                    selector.TextSelectorConfig(type="password")
+                ),
+                vol.Required(
+                    "remember",
+                    default=bool(existing.get(CONF_CLOUD_REMEMBER, True)),
+                ): selector.BooleanSelector(),
+            }),
+            errors=errors,
+            description_placeholders={"email": email},
+        )
+
+    # ------------------------------------------------------------------ #
     def _create_entry(self, *, ble_name: str) -> FlowResult:
         suffix = _serial_suffix(ble_name)
         data: dict[str, Any] = {CONF_BLE_NAME: ble_name}
@@ -238,6 +316,7 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             email = (user_input.get("email") or "").strip()
             password = user_input.get("password") or ""
+            remember = bool(user_input.get("remember", True))
             if not email or not password:
                 errors["base"] = "credentials_required"
             else:
@@ -252,6 +331,7 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
                         "password": password,
                         "member_id": creds["memberId"],
                         "token": creds["token"],
+                        "remember": remember,
                     }
                     # If there are local recipes, ask the user what to do with
                     # them before switching the source of truth to the cloud.
@@ -273,6 +353,7 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
                 vol.Required("password"): selector.TextSelector(
                     selector.TextSelectorConfig(type="password")
                 ),
+                vol.Required("remember", default=True): selector.BooleanSelector(),
             }),
             errors=errors,
         )
@@ -687,7 +768,10 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Pick a recipe to edit, then re-use the create_recipe_pours UI."""
         coordinator = self.config_entry.runtime_data.coordinator
-        recipes: list[dict] = await coordinator.store.async_load()
+        # Pull the latest list on entry so cloud-side edits (e.g. from the phone)
+        # are reflected — event-driven, not waiting on the background poll.
+        await coordinator.async_refresh()
+        recipes: list[dict] = list(coordinator.data or [])
         if not recipes:
             return self.async_abort(reason="no_recipes")
 
@@ -762,7 +846,9 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Pick a recipe to delete (id-keyed for D-61 rename safety)."""
         coordinator = self.config_entry.runtime_data.coordinator
-        recipes: list[dict] = await coordinator.store.async_load()
+        # Pull the latest list on entry (see edit_recipe) so the dropdown is fresh.
+        await coordinator.async_refresh()
+        recipes: list[dict] = list(coordinator.data or [])
         if not recipes:
             return self.async_abort(reason="no_recipes")
 

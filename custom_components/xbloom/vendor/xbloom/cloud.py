@@ -379,7 +379,11 @@ class XBloomCloudSession:
 
     Args:
         client: the stateless transport client.
-        email/password: account credentials, used to re-login on expiry.
+        email: account email.
+        password: account password, or ``None`` if the user chose not to store
+            it. When absent, an expired token cannot be refreshed silently — the
+            session re-raises the expiry so the integration can prompt a
+            re-login instead.
         member_id/token: the current session credentials.
         on_token_refreshed: optional sync callback invoked with the new
             ``(member_id, token)`` whenever a re-login mints a fresh token.
@@ -390,7 +394,7 @@ class XBloomCloudSession:
         client: XBloomCloudClient,
         *,
         email: str,
-        password: str,
+        password: str | None,
         member_id: int,
         token: str,
         on_token_refreshed: Any = None,
@@ -403,6 +407,12 @@ class XBloomCloudSession:
         self._on_token_refreshed = on_token_refreshed
 
     async def _relogin(self) -> None:
+        if not self._password:
+            # No stored password — we can't refresh. Signal that the caller must
+            # re-authenticate (prompt the user for credentials again).
+            raise XBloomAuthError(
+                "session expired and credentials are not stored", expired=True
+            )
         fresh = await self._client.login(self._email, self._password)
         self.member_id = fresh["memberId"]
         self.token = fresh["token"]

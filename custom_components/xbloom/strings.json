@@ -12,15 +12,26 @@
         "data": {
           "ble_name": "Machine (BLE name)"
         }
+      },
+      "reauth_confirm": {
+        "title": "Log in to xBloom again",
+        "description": "Your xBloom cloud session for {email} has expired and can't be refreshed. Enter your password to log in again and resume recipe sync.",
+        "data": {
+          "password": "Password",
+          "remember": "Remember my credentials"
+        }
       }
     },
     "error": {
       "ble_name_required": "Pick a machine from the list, or type its BLE name.",
-      "ble_name_invalid": "BLE names look like 'XBLOOM ABC123'. Check the value from the iOS app's machine settings."
+      "ble_name_invalid": "BLE names look like 'XBLOOM ABC123'. Check the value from the iOS app's machine settings.",
+      "credentials_required": "Enter your password.",
+      "cloud_login_failed": "Login failed. Check your xBloom email and password and try again."
     },
     "abort": {
       "already_configured": "This xBloom machine is already set up.",
-      "not_supported": "This Bluetooth device doesn't look like an xBloom machine."
+      "not_supported": "This Bluetooth device doesn't look like an xBloom machine.",
+      "reauth_successful": "Logged in again — recipe sync resumed."
     }
   },
   "options": {
@@ -40,10 +51,11 @@
       },
       "cloud_login": {
         "title": "Log in to xBloom cloud",
-        "description": "Sign in with your xBloom account to sync recipes and unlock cloud features (create/edit recipes from the cloud, firmware updates). Your email and password are stored locally in Home Assistant so the session can refresh itself — they're only ever sent to xBloom's login endpoint.",
+        "description": "Sign in with your xBloom account to sync recipes and unlock cloud features (create/edit recipes from the cloud, firmware updates). Turn on *Remember my credentials* to have the session refresh itself automatically — your password is then stored locally in Home Assistant (only ever sent to xBloom's login endpoint). Leave it off for more privacy: you'll be asked to log in again whenever the session expires.",
         "data": {
           "email": "Email",
-          "password": "Password"
+          "password": "Password",
+          "remember": "Remember my credentials"
         }
       },
       "cloud_reconcile": {

@@ -28,6 +28,7 @@ from datetime import timedelta
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
@@ -35,11 +36,16 @@ from .const import (
     CONF_CLOUD_EMAIL,
     CONF_CLOUD_MEMBER_ID,
     CONF_CLOUD_PASSWORD,
+    CONF_CLOUD_REMEMBER,
     CONF_CLOUD_TOKEN,
     DOMAIN,
 )
 from .storage import XBloomRecipeStore
-from .vendor.xbloom.cloud import XBloomCloudClient, XBloomCloudSession
+from .vendor.xbloom.cloud import (
+    XBloomAuthError,
+    XBloomCloudClient,
+    XBloomCloudSession,
+)
 from .vendor.xbloom.exceptions import XBloomAPIError
 
 _LOGGER = logging.getLogger(__name__)
@@ -114,18 +120,31 @@ class XBloomCoordinator(DataUpdateCoordinator):
         })
 
     def _session(self) -> XBloomCloudSession | None:
-        """Build a vendor session from stored creds, or None if logged out."""
+        """Build a vendor session from stored creds, or None if logged out.
+
+        The password may be absent (the user didn't opt to remember it); the
+        session then can't self-refresh and re-raises on token expiry, which we
+        turn into a reauth prompt.
+        """
         creds = self._creds()
         if not creds:
             return None
         return XBloomCloudSession(
             self._cloud,
             email=creds[CONF_CLOUD_EMAIL],
-            password=creds[CONF_CLOUD_PASSWORD],
+            password=creds.get(CONF_CLOUD_PASSWORD),
             member_id=creds[CONF_CLOUD_MEMBER_ID],
             token=creds[CONF_CLOUD_TOKEN],
             on_token_refreshed=self._on_token_refreshed,
         )
+
+    def _start_reauth(self) -> None:
+        """Ask HA to open the reauth flow (user must log in again)."""
+        _LOGGER.warning(
+            "xbloom cloud: session needs re-authentication for %s",
+            self.cloud_email,
+        )
+        self.config_entry.async_start_reauth(self.hass)
 
     # ------------------------------------------------------------------ #
     # Data source                                                         #
@@ -137,6 +156,10 @@ class XBloomCoordinator(DataUpdateCoordinator):
             return await self.store.async_load()
         try:
             recipes = await session.list_recipes()
+        except XBloomAuthError as err:
+            # Token invalid/expired and we can't refresh (no stored password, or
+            # the credentials themselves are no longer valid). Prompt re-login.
+            raise ConfigEntryAuthFailed(str(err)) from err
         except (XBloomAPIError, aiohttp.ClientError) as err:
             _LOGGER.warning(
                 "xbloom cloud: recipe list failed (%s) — serving last cached copy",
@@ -151,11 +174,19 @@ class XBloomCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------ #
     # Recipe CRUD — routed to cloud when logged in, else local            #
     # ------------------------------------------------------------------ #
+    async def _cloud_op(self, coro):
+        """Await a cloud coroutine, opening a reauth prompt on auth failure."""
+        try:
+            return await coro
+        except XBloomAuthError:
+            self._start_reauth()
+            raise
+
     async def async_add_recipe(self, recipe: dict) -> None:
         """Add a recipe and refresh subscribers."""
         session = self._session()
         if session is not None:
-            await session.create_recipe(recipe)
+            await self._cloud_op(session.create_recipe(recipe))
         else:
             await self.store.async_add(recipe)
         await self.async_request_refresh()
@@ -170,7 +201,7 @@ class XBloomCoordinator(DataUpdateCoordinator):
             )
             if table_id is None:
                 return False
-            await session.delete_recipe(table_id)
+            await self._cloud_op(session.delete_recipe(table_id))
             await self.async_request_refresh()
             return True
         removed = await self.store.async_remove(name)
@@ -184,11 +215,11 @@ class XBloomCoordinator(DataUpdateCoordinator):
         if session is not None:
             table_id = str(recipe.get("id") or "")
             if table_id and not table_id.startswith("local-"):
-                await session.update_recipe(table_id, recipe)
+                await self._cloud_op(session.update_recipe(table_id, recipe))
             else:
                 # A locally-created recipe saved while logged in — create it in
                 # the cloud so it gets a real tableId.
-                await session.create_recipe(recipe)
+                await self._cloud_op(session.create_recipe(recipe))
             await self.async_request_refresh()
             return
         await self.store.async_replace(recipe)
@@ -198,7 +229,7 @@ class XBloomCoordinator(DataUpdateCoordinator):
         """Delete a recipe by id and refresh subscribers."""
         session = self._session()
         if session is not None:
-            await session.delete_recipe(table_id)
+            await self._cloud_op(session.delete_recipe(table_id))
             await self.async_request_refresh()
             return True
         deleted = await self.store.async_delete(table_id)
@@ -217,6 +248,25 @@ class XBloomCoordinator(DataUpdateCoordinator):
         """
         return await self._cloud.login(email, password)
 
+    @staticmethod
+    def _build_creds(
+        *, email: str, password: str, member_id: int, token: str, remember: bool
+    ) -> dict:
+        """Assemble the stored credential dict.
+
+        The password is persisted only when ``remember`` is set — otherwise just
+        the token is kept, and an expired token later triggers a reauth prompt.
+        """
+        creds = {
+            CONF_CLOUD_EMAIL: email,
+            CONF_CLOUD_MEMBER_ID: member_id,
+            CONF_CLOUD_TOKEN: token,
+            CONF_CLOUD_REMEMBER: remember,
+        }
+        if remember:
+            creds[CONF_CLOUD_PASSWORD] = password
+        return creds
+
     async def async_finalize_login(
         self,
         *,
@@ -224,6 +274,7 @@ class XBloomCoordinator(DataUpdateCoordinator):
         password: str,
         member_id: int,
         token: str,
+        remember: bool,
         upload_local: bool,
     ) -> None:
         """Persist credentials and reconcile the pre-existing local library.
@@ -244,12 +295,21 @@ class XBloomCoordinator(DataUpdateCoordinator):
                         recipe.get("name"), err,
                     )
         await self.store.async_replace_all([])
-        self._save_creds({
-            CONF_CLOUD_EMAIL: email,
-            CONF_CLOUD_PASSWORD: password,
-            CONF_CLOUD_MEMBER_ID: member_id,
-            CONF_CLOUD_TOKEN: token,
-        })
+        self._save_creds(self._build_creds(
+            email=email, password=password, member_id=member_id,
+            token=token, remember=remember,
+        ))
+        await self.async_request_refresh()
+
+    async def async_apply_reauth(
+        self, *, email: str, password: str, member_id: int, token: str,
+        remember: bool,
+    ) -> None:
+        """Update stored credentials after a successful reauth (no reconcile)."""
+        self._save_creds(self._build_creds(
+            email=email, password=password, member_id=member_id,
+            token=token, remember=remember,
+        ))
         await self.async_request_refresh()
 
     async def async_cloud_logout(self) -> None:
