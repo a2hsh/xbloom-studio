@@ -1,49 +1,178 @@
 """DataUpdateCoordinator for the xBloom Studio integration.
 
-Local-only architecture: the coordinator's `data` is the locally-stored
-recipe library (a list of Recipe dicts). Recipes are added by the user via
-the integration's options flow; the store calls `async_request_refresh()`
-when the library changes so the select entity sees the update immediately.
+Two data sources, one surface. The coordinator's ``data`` is always the recipe
+library (a list of Recipe dicts) that entities (e.g. the recipe select) read —
+but where that library comes from depends on whether the user is logged in to
+the xBloom cloud:
 
-The MQTT-driven entities (sensor, binary_sensor, switch, event) bypass this
-coordinator entirely.
+  * **Logged out** — the library is HA's local ``Store`` (``storage.py``).
+    Recipes are created/edited/deleted locally via the options flow. This is
+    the original BLE-only behavior; no cloud/vendor calls happen at all.
+  * **Logged in** — the xBloom cloud is the single source of truth. Every
+    refresh pulls the user's cloud recipe list and mirrors it into the local
+    ``Store`` so entities keep working offline. Create/edit/delete route to the
+    cloud, and the next refresh re-pulls the authoritative list.
+
+This module is the Home Assistant *integration layer*: it owns credential
+storage (the config entry), the HA data surface, and the local mirror. All
+xBloom protocol/API knowledge — login, RSA, re-login-on-expiry — lives in the
+portable vendor library (``vendor.xbloom.cloud``). The coordinator only
+*supplies* the token to a vendor :class:`XBloomCloudSession` and *persists* a
+refreshed one via a callback.
 """
-import logging
+from __future__ import annotations
 
+import logging
+from datetime import timedelta
+
+import aiohttp
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN
+from .const import (
+    CONF_CLOUD,
+    CONF_CLOUD_EMAIL,
+    CONF_CLOUD_MEMBER_ID,
+    CONF_CLOUD_PASSWORD,
+    CONF_CLOUD_TOKEN,
+    DOMAIN,
+)
 from .storage import XBloomRecipeStore
+from .vendor.xbloom.cloud import XBloomCloudClient, XBloomCloudSession
+from .vendor.xbloom.exceptions import XBloomAPIError
 
 _LOGGER = logging.getLogger(__name__)
 
+# How often to re-pull the cloud library so recipes added on the phone appear
+# in HA without a manual reload.
+_CLOUD_POLL_INTERVAL = timedelta(minutes=15)
+
 
 class XBloomCoordinator(DataUpdateCoordinator):
-    """Surfaces the locally-stored recipe library to entities (e.g. select)."""
+    """Surfaces the recipe library (local or cloud) to entities."""
 
-    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        cloud: XBloomCloudClient,
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=None,  # local data — refreshed manually when storage changes
+            update_interval=None,  # set per login state below
         )
         self.config_entry = config_entry
         self.store = XBloomRecipeStore(hass, config_entry.entry_id)
+        self._cloud = cloud
+        self._apply_update_interval()
 
+    # ------------------------------------------------------------------ #
+    # Credential state (integration-layer concern)                        #
+    # ------------------------------------------------------------------ #
+    def _creds(self) -> dict | None:
+        return self.config_entry.data.get(CONF_CLOUD)
+
+    @property
+    def cloud_logged_in(self) -> bool:
+        creds = self._creds()
+        return bool(
+            creds
+            and creds.get(CONF_CLOUD_TOKEN)
+            and creds.get(CONF_CLOUD_MEMBER_ID) is not None
+        )
+
+    @property
+    def cloud_email(self) -> str | None:
+        creds = self._creds()
+        return creds.get(CONF_CLOUD_EMAIL) if creds else None
+
+    def _apply_update_interval(self) -> None:
+        self.update_interval = _CLOUD_POLL_INTERVAL if self.cloud_logged_in else None
+
+    def _save_creds(self, creds: dict | None) -> None:
+        """Persist (or clear) cloud credentials on the config entry."""
+        if creds is None:
+            data = {
+                k: v for k, v in self.config_entry.data.items() if k != CONF_CLOUD
+            }
+        else:
+            data = {**self.config_entry.data, CONF_CLOUD: creds}
+        self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+        self._apply_update_interval()
+
+    @callback
+    def _on_token_refreshed(self, member_id: int, token: str) -> None:
+        """Vendor session re-logged-in — persist the fresh token."""
+        creds = self._creds() or {}
+        self._save_creds({
+            **creds,
+            CONF_CLOUD_MEMBER_ID: member_id,
+            CONF_CLOUD_TOKEN: token,
+        })
+
+    def _session(self) -> XBloomCloudSession | None:
+        """Build a vendor session from stored creds, or None if logged out."""
+        creds = self._creds()
+        if not creds:
+            return None
+        return XBloomCloudSession(
+            self._cloud,
+            email=creds[CONF_CLOUD_EMAIL],
+            password=creds[CONF_CLOUD_PASSWORD],
+            member_id=creds[CONF_CLOUD_MEMBER_ID],
+            token=creds[CONF_CLOUD_TOKEN],
+            on_token_refreshed=self._on_token_refreshed,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Data source                                                         #
+    # ------------------------------------------------------------------ #
     async def _async_update_data(self) -> list[dict]:
-        """Return the current recipe library from local storage."""
-        return await self.store.async_load()
+        """Return the current recipe library (cloud when logged in, else local)."""
+        session = self._session()
+        if session is None:
+            return await self.store.async_load()
+        try:
+            recipes = await session.list_recipes()
+        except (XBloomAPIError, aiohttp.ClientError) as err:
+            _LOGGER.warning(
+                "xbloom cloud: recipe list failed (%s) — serving last cached copy",
+                err,
+            )
+            return await self.store.async_load()
+        # Mirror the authoritative cloud list into local storage so entities
+        # keep working offline (and so a later logout leaves a usable library).
+        await self.store.async_replace_all(recipes)
+        return recipes
 
+    # ------------------------------------------------------------------ #
+    # Recipe CRUD — routed to cloud when logged in, else local            #
+    # ------------------------------------------------------------------ #
     async def async_add_recipe(self, recipe: dict) -> None:
         """Add a recipe and refresh subscribers."""
-        await self.store.async_add(recipe)
+        session = self._session()
+        if session is not None:
+            await session.create_recipe(recipe)
+        else:
+            await self.store.async_add(recipe)
         await self.async_request_refresh()
 
     async def async_remove_recipe(self, name: str) -> bool:
         """Remove a recipe by name and refresh subscribers."""
+        session = self._session()
+        if session is not None:
+            table_id = next(
+                (str(r["id"]) for r in (self.data or []) if r.get("name") == name),
+                None,
+            )
+            if table_id is None:
+                return False
+            await session.delete_recipe(table_id)
+            await self.async_request_refresh()
+            return True
         removed = await self.store.async_remove(name)
         if removed:
             await self.async_request_refresh()
@@ -51,12 +180,79 @@ class XBloomCoordinator(DataUpdateCoordinator):
 
     async def async_replace_recipe(self, recipe: dict) -> None:
         """Overwrite (or insert) a recipe by id and refresh subscribers."""
+        session = self._session()
+        if session is not None:
+            table_id = str(recipe.get("id") or "")
+            if table_id and not table_id.startswith("local-"):
+                await session.update_recipe(table_id, recipe)
+            else:
+                # A locally-created recipe saved while logged in — create it in
+                # the cloud so it gets a real tableId.
+                await session.create_recipe(recipe)
+            await self.async_request_refresh()
+            return
         await self.store.async_replace(recipe)
         await self.async_request_refresh()
 
     async def async_delete_recipe(self, table_id: str) -> bool:
         """Delete a recipe by id and refresh subscribers."""
+        session = self._session()
+        if session is not None:
+            await session.delete_recipe(table_id)
+            await self.async_request_refresh()
+            return True
         deleted = await self.store.async_delete(table_id)
         if deleted:
             await self.async_request_refresh()
         return deleted
+
+    # ------------------------------------------------------------------ #
+    # Login / logout / first-login reconciliation                         #
+    # ------------------------------------------------------------------ #
+    async def async_validate_login(self, email: str, password: str) -> dict:
+        """Verify credentials without persisting them. Returns ``{memberId, token}``.
+
+        Raises ``XBloomAuthError``/``XBloomAPIError`` on failure so the options
+        flow can show an error.
+        """
+        return await self._cloud.login(email, password)
+
+    async def async_finalize_login(
+        self,
+        *,
+        email: str,
+        password: str,
+        member_id: int,
+        token: str,
+        upload_local: bool,
+    ) -> None:
+        """Persist credentials and reconcile the pre-existing local library.
+
+        ``upload_local`` True pushes every locally-stored recipe up to the cloud
+        first; False discards them. Either way the local ``Store`` is cleared —
+        the subsequent refresh repopulates it as a mirror of the cloud, which
+        becomes the single source of truth.
+        """
+        if upload_local:
+            local = await self.store.async_load()
+            for recipe in local:
+                try:
+                    await self._cloud.create_recipe(member_id, token, recipe)
+                except XBloomAPIError as err:
+                    _LOGGER.warning(
+                        "xbloom cloud: uploading local recipe %r failed: %s",
+                        recipe.get("name"), err,
+                    )
+        await self.store.async_replace_all([])
+        self._save_creds({
+            CONF_CLOUD_EMAIL: email,
+            CONF_CLOUD_PASSWORD: password,
+            CONF_CLOUD_MEMBER_ID: member_id,
+            CONF_CLOUD_TOKEN: token,
+        })
+        await self.async_request_refresh()
+
+    async def async_cloud_logout(self) -> None:
+        """Clear cloud credentials; fall back to the local (mirrored) library."""
+        self._save_creds(None)
+        await self.async_request_refresh()

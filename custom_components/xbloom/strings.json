@@ -27,13 +27,38 @@
     "step": {
       "init": {
         "title": "xBloom recipe library",
-        "description": "Create, edit, or remove recipes available to the integration. Recipes are stored locally — no xBloom account required.",
+        "description": "Create, edit, or remove recipes. Log in to your xBloom account to sync recipes with the cloud (optional) — otherwise recipes are stored locally.",
         "menu_options": {
           "create_recipe": "Create a recipe",
           "edit_recipe": "Edit a recipe",
           "delete_recipe": "Delete a recipe",
           "add_recipe": "Add a recipe by share URL",
+          "cloud_login": "Log in to xBloom cloud",
+          "cloud_logout": "Log out of xBloom cloud",
           "done": "Done"
+        }
+      },
+      "cloud_login": {
+        "title": "Log in to xBloom cloud",
+        "description": "Sign in with your xBloom account to sync recipes and unlock cloud features (create/edit recipes from the cloud, firmware updates). Your email and password are stored locally in Home Assistant so the session can refresh itself — they're only ever sent to xBloom's login endpoint.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "cloud_reconcile": {
+        "title": "You have {count} local recipe(s)",
+        "description": "Once you log in, the xBloom cloud becomes the single source of truth for your recipes. What should happen to the {count} recipe(s) currently stored locally?",
+        "menu_options": {
+          "cloud_upload": "Upload my local recipes to the cloud",
+          "cloud_replace": "Delete local recipes and use the cloud"
+        }
+      },
+      "cloud_logout": {
+        "title": "Log out of xBloom cloud",
+        "description": "Log out of {email}? Recipes will revert to the local library (your synced recipes stay cached locally). Firmware updates and cloud recipe editing will be unavailable until you log in again.",
+        "data": {
+          "confirm": "Yes, log out"
         }
       },
       "add_recipe": {
@@ -258,7 +283,9 @@
       "bypass_temp_required": "Bypass water temperature is required when bypass is enabled.",
       "slot_write_failed": "Couldn't write to machine slot. Make sure the machine is powered on and try again, or pick skip.",
       "dose_out_of_range_for_cup": "Dose is outside the dripper's allowed range. Omni dripper accepts 5–18 g; Other accepts 5–25 g; xPod is locked at 15 g; Tea accepts 1–5 g.",
-      "volume_out_of_range": "Each pour volume must be between 0 and 240 ml."
+      "volume_out_of_range": "Each pour volume must be between 0 and 240 ml.",
+      "credentials_required": "Enter both your email and password.",
+      "cloud_login_failed": "Login failed. Check your xBloom email and password and try again."
     },
     "abort": {
       "no_recipes": "No recipes saved yet."
@@ -331,6 +358,11 @@
     "switch": {
       "use_grinder": {
         "name": "Use Grinder"
+      }
+    },
+    "update": {
+      "xbloom_firmware": {
+        "name": "Firmware"
       }
     }
   }

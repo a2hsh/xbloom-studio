@@ -31,6 +31,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import CONF_BLE_NAME, CONF_PRODUCT_ID, DOMAIN
 from .coordinator import XBloomCoordinator
 from .vendor.xbloom.client import XBloomClient
+from .vendor.xbloom.cloud import XBloomCloudClient
 from .vendor.xbloom import spec
 from .vendor.xbloom.recipe_validate import normalize_recipe, validate_recipe
 
@@ -47,7 +48,7 @@ def _describe_errors(errors: dict[str, str]) -> str:
     return "; ".join(f"{field}: {key}" for field, key in sorted(errors.items()))
 
 
-PLATFORMS = ["select", "button", "number", "sensor", "event", "switch"]
+PLATFORMS = ["select", "button", "number", "sensor", "event", "switch", "update"]
 
 # A start_brew call within this many seconds of the previous dispatch is
 # treated as a duplicate (e.g. a voice-agent HTTP retry) and ignored. A call
@@ -61,6 +62,13 @@ class XBloomRuntimeData:
 
     coordinator: XBloomCoordinator
     client: XBloomClient
+    cloud: XBloomCloudClient
+    # Installed firmware version as last reported by the machine over BLE
+    # (RD_MachineInfo / ScanDeviceModel.theVersion). None until decoded — the
+    # firmware update entity reads it for its `installed_version`. Wiring the
+    # BLE decode that fills this is a follow-up; the cloud-side "latest version"
+    # check works today regardless.
+    installed_fw_version: str | None = None
     # BLE device resolver — set in async_setup_entry. Phase 8 mode
     # listeners (08-04+) re-resolve on every start so adapter routing
     # stays correct after rediscovery.
@@ -105,8 +113,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: XBloomConfigEntry) -> bo
     """Set up xBloom Studio from a config entry."""
     session = async_get_clientsession(hass)
     client = XBloomClient(session)
+    cloud = XBloomCloudClient(session)
 
-    coordinator = XBloomCoordinator(hass, entry)
+    coordinator = XBloomCoordinator(hass, entry, cloud)
     await coordinator.async_config_entry_first_refresh()
 
     # BLE device resolver — captures `entry` so the switch platform doesn't
@@ -120,6 +129,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: XBloomConfigEntry) -> bo
     entry.runtime_data = XBloomRuntimeData(
         coordinator=coordinator,
         client=client,
+        cloud=cloud,
         ble_device_resolver=_ble_device_for_listener,
     )
 

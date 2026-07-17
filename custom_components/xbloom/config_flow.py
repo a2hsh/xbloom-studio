@@ -201,10 +201,16 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
         self._draft: dict | None = None
         self._delete_target: dict | None = None
         self._post_save: dict | None = None
+        self._pending_login: dict | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
+        coordinator = self.config_entry.runtime_data.coordinator
+        # The cloud entry is contextual: offer login when logged out, and
+        # logout when logged in. Everything else (recipe CRUD) is identical —
+        # the coordinator routes it to the cloud or local storage transparently.
+        cloud_option = "cloud_logout" if coordinator.cloud_logged_in else "cloud_login"
         return self.async_show_menu(
             step_id="init",
             menu_options=[
@@ -212,8 +218,118 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
                 "edit_recipe",
                 "delete_recipe",
                 "add_recipe",
+                cloud_option,
                 "done",
             ],
+        )
+
+    # ------------------------------------------------------------------ #
+    # Cloud account — login / first-login reconciliation / logout        #
+    # ------------------------------------------------------------------ #
+    async def async_step_cloud_login(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Log in to the xBloom cloud with email + password."""
+        from .vendor.xbloom.exceptions import XBloomAPIError
+
+        errors: dict[str, str] = {}
+        coordinator = self.config_entry.runtime_data.coordinator
+
+        if user_input is not None:
+            email = (user_input.get("email") or "").strip()
+            password = user_input.get("password") or ""
+            if not email or not password:
+                errors["base"] = "credentials_required"
+            else:
+                try:
+                    creds = await coordinator.async_validate_login(email, password)
+                except XBloomAPIError as err:
+                    _LOGGER.warning("xbloom cloud login failed: %s", err)
+                    errors["base"] = "cloud_login_failed"
+                else:
+                    self._pending_login = {
+                        "email": email,
+                        "password": password,
+                        "member_id": creds["memberId"],
+                        "token": creds["token"],
+                    }
+                    # If there are local recipes, ask the user what to do with
+                    # them before switching the source of truth to the cloud.
+                    local = await coordinator.store.async_load()
+                    if local:
+                        return await self.async_step_cloud_reconcile()
+                    await coordinator.async_finalize_login(
+                        **self._pending_login, upload_local=False
+                    )
+                    self._pending_login = None
+                    return self.async_create_entry(title="", data={"_cloud": "login"})
+
+        return self.async_show_form(
+            step_id="cloud_login",
+            data_schema=vol.Schema({
+                vol.Required("email"): selector.TextSelector(
+                    selector.TextSelectorConfig(type="email")
+                ),
+                vol.Required("password"): selector.TextSelector(
+                    selector.TextSelectorConfig(type="password")
+                ),
+            }),
+            errors=errors,
+        )
+
+    async def async_step_cloud_reconcile(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """First login with local recipes present — upload them or discard them."""
+        assert self._pending_login is not None
+        coordinator = self.config_entry.runtime_data.coordinator
+        local = await coordinator.store.async_load()
+        return self.async_show_menu(
+            step_id="cloud_reconcile",
+            menu_options=["cloud_upload", "cloud_replace"],
+            description_placeholders={"count": str(len(local))},
+        )
+
+    async def async_step_cloud_upload(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Reconcile choice: upload local recipes to the cloud, then switch."""
+        return await self._finalize_cloud_login(upload_local=True)
+
+    async def async_step_cloud_replace(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Reconcile choice: discard local recipes, cloud becomes authoritative."""
+        return await self._finalize_cloud_login(upload_local=False)
+
+    async def _finalize_cloud_login(self, *, upload_local: bool) -> FlowResult:
+        assert self._pending_login is not None
+        coordinator = self.config_entry.runtime_data.coordinator
+        await coordinator.async_finalize_login(
+            **self._pending_login, upload_local=upload_local
+        )
+        self._pending_login = None
+        return self.async_create_entry(
+            title="", data={"_cloud": "upload" if upload_local else "replace"}
+        )
+
+    async def async_step_cloud_logout(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Confirm, then log out of the cloud and revert to the local library."""
+        coordinator = self.config_entry.runtime_data.coordinator
+        if user_input is not None:
+            if user_input.get("confirm"):
+                await coordinator.async_cloud_logout()
+                return self.async_create_entry(title="", data={"_cloud": "logout"})
+            return self.async_create_entry(title="", data={"_cancelled": True})
+
+        return self.async_show_form(
+            step_id="cloud_logout",
+            data_schema=vol.Schema({
+                vol.Required("confirm", default=False): selector.BooleanSelector(),
+            }),
+            description_placeholders={"email": coordinator.cloud_email or ""},
         )
 
     async def async_step_add_recipe(
