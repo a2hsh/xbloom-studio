@@ -45,7 +45,9 @@ Recipes are managed after setup from the integration's **Configure** (options) m
 
 The same **Configure** menu has **Log in to xBloom cloud**. Sign in with your xBloom account email and password to sync recipes with the cloud — once logged in, the cloud becomes the single source of truth and every create / edit / delete is written back to your account. If you already have local recipes, you'll be asked whether to upload them to the cloud or discard them.
 
-Your email and password are stored locally in Home Assistant (in `.storage`, alongside the session token) so the session can refresh itself when the token expires; they are only ever sent to xBloom's login endpoint. Use **Log out of xBloom cloud** to clear them and return to the local library (your synced recipes stay cached locally). The cloud is entirely optional — leaving it out keeps the integration BLE-only.
+Tick **Remember my credentials** to store your password locally (in `.storage`, alongside the session token) so the session refreshes itself automatically when the token expires — it's only ever sent to xBloom's login endpoint. Leave it unticked for more privacy: only the token is kept, and when it expires you'll be prompted to log in again. Use **Log out of xBloom cloud** to clear everything and return to the local library (your synced recipes stay cached locally). The cloud is entirely optional — leaving it out keeps the integration BLE-only.
+
+Recipe sync is event-driven, not polled: changes you make in Home Assistant apply immediately, and the options-flow recipe lists pull fresh from the cloud each time you open them. A recipe added or edited on your phone shows up on dashboard dropdowns after you press the **Refresh Recipes** button (Home Assistant has no way to fetch on a dropdown opening).
 
 ## Entities
 

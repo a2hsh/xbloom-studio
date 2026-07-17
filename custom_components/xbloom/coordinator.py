@@ -19,11 +19,17 @@ xBloom protocol/API knowledge — login, RSA, re-login-on-expiry — lives in th
 portable vendor library (``vendor.xbloom.cloud``). The coordinator only
 *supplies* the token to a vendor :class:`XBloomCloudSession` and *persists* a
 refreshed one via a callback.
+
+Refresh is fully event-driven — there is no background poll. The library is
+re-pulled from the cloud when: a recipe is created/edited/deleted in HA, the
+options-flow recipe screens are opened, or the *Refresh Recipes* button is
+pressed. (HA gives the backend no "dashboard dropdown opened" event, and the
+xBloom recipe API has no push, so a phone-side edit shows on a dashboard
+dropdown only after one of those triggers.)
 """
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -50,10 +56,6 @@ from .vendor.xbloom.exceptions import XBloomAPIError
 
 _LOGGER = logging.getLogger(__name__)
 
-# How often to re-pull the cloud library so recipes added on the phone appear
-# in HA without a manual reload.
-_CLOUD_POLL_INTERVAL = timedelta(minutes=15)
-
 
 class XBloomCoordinator(DataUpdateCoordinator):
     """Surfaces the recipe library (local or cloud) to entities."""
@@ -68,12 +70,11 @@ class XBloomCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=None,  # set per login state below
+            update_interval=None,  # event-driven; no background poll
         )
         self.config_entry = config_entry
         self.store = XBloomRecipeStore(hass, config_entry.entry_id)
         self._cloud = cloud
-        self._apply_update_interval()
 
     # ------------------------------------------------------------------ #
     # Credential state (integration-layer concern)                        #
@@ -95,9 +96,6 @@ class XBloomCoordinator(DataUpdateCoordinator):
         creds = self._creds()
         return creds.get(CONF_CLOUD_EMAIL) if creds else None
 
-    def _apply_update_interval(self) -> None:
-        self.update_interval = _CLOUD_POLL_INTERVAL if self.cloud_logged_in else None
-
     def _save_creds(self, creds: dict | None) -> None:
         """Persist (or clear) cloud credentials on the config entry."""
         if creds is None:
@@ -107,7 +105,6 @@ class XBloomCoordinator(DataUpdateCoordinator):
         else:
             data = {**self.config_entry.data, CONF_CLOUD: creds}
         self.hass.config_entries.async_update_entry(self.config_entry, data=data)
-        self._apply_update_interval()
 
     @callback
     def _on_token_refreshed(self, member_id: int, token: str) -> None:
