@@ -31,7 +31,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import CONF_BLE_NAME, CONF_PRODUCT_ID, DOMAIN
 from .coordinator import XBloomCoordinator
 from .vendor.xbloom.client import XBloomClient
-from .vendor.xbloom.cloud import XBloomCloudClient
+from .vendor.xbloom.cloud import XBloomCloudClient, language_type_for
 from .vendor.xbloom import spec
 from .vendor.xbloom.recipe_validate import normalize_recipe, validate_recipe
 
@@ -113,7 +113,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: XBloomConfigEntry) -> bo
     """Set up xBloom Studio from a config entry."""
     session = async_get_clientsession(hass)
     client = XBloomClient(session)
-    cloud = XBloomCloudClient(session)
+    # Speak the user's HA language to the cloud so server-returned messages
+    # match their locale (Arabic HA → Arabic API messages, etc.).
+    cloud = XBloomCloudClient(
+        session, language_type=language_type_for(hass.config.language)
+    )
 
     coordinator = XBloomCoordinator(hass, entry, cloud)
     await coordinator.async_config_entry_first_refresh()

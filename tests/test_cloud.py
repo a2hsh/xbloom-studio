@@ -30,6 +30,7 @@ from xbloom.cloud import (  # noqa: E402
     XBloomCloudSession,
     _ratio_denominator,
     _rsa_encrypt,
+    language_type_for,
     recipe_to_cloud_body,
 )
 
@@ -290,6 +291,30 @@ def test_list_recipes_survives_shared_endpoint_failure():
     recipes = asyncio.run(client.list_recipes(18812, "tok"))
     # Created recipes still returned even though the shared list failed.
     assert [r["name"] for r in recipes] == ["Created A"]
+
+
+# --------------------------------------------------------------------------- #
+# language_type_for — HA locale → xBloom languageType                          #
+# --------------------------------------------------------------------------- #
+def test_language_type_for_known_and_regioned():
+    assert language_type_for("en") == 0
+    assert language_type_for("fr") == 1
+    assert language_type_for("de") == 2
+    assert language_type_for("ar") == 7
+    # HA uses BCP-47 for Chinese variants.
+    assert language_type_for("zh-Hans") == 3
+    assert language_type_for("zh-Hant") == 4
+    # Region subtags fall back to the primary language.
+    assert language_type_for("en-US") == 0
+    assert language_type_for("ar-SA") == 7
+    # Underscore separator + case are normalised.
+    assert language_type_for("EN_us") == 0
+
+
+def test_language_type_for_unknown_defaults_english():
+    assert language_type_for(None) == 0
+    assert language_type_for("") == 0
+    assert language_type_for("pt-BR") == 0  # unsupported → English
 
 
 if __name__ == "__main__":

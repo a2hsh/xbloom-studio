@@ -53,19 +53,40 @@ _HEADERS = {
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
 }
 
-# The base "envelope" every client-api body carries.
 # languageType controls the language of server-returned messages (e.g. error
-# text). Confirmed from the Android LanguageKey/LanguageType constants:
-#   0=English 1=French 2=German 3=Chinese(Simp) 4=Chinese(Trad)
-#   5=Korean 6=Japanese 7=Arabic
-# The xbloom-agent MCP hard-codes 1 (French); we send 0 so any surfaced/logged
-# API message is English. (It has no effect on recipe data.)
-_ENVELOPE = {
+# text — it has no effect on recipe data). Confirmed from the Android
+# LanguageKey/LanguageType constants, cross-checked against the iOS enum.
+LANGUAGE_TYPES = {
+    "en": 0, "fr": 1, "de": 2,
+    "zh-hans": 3, "zh-cn": 3,
+    "zh-hant": 4, "zh-tw": 4, "zh-hk": 4,
+    "ko": 5, "ja": 6, "ar": 7,
+}
+DEFAULT_LANGUAGE_TYPE = 0  # English
+
+
+def language_type_for(code: str | None) -> int:
+    """Map a language code (e.g. a Home Assistant locale, BCP-47) to xBloom's
+    ``languageType`` int. Falls back to English for anything unrecognised.
+
+    Handles region subtags (``en-US`` → ``en``) and both ``-``/``_`` separators.
+    """
+    if not code:
+        return DEFAULT_LANGUAGE_TYPE
+    norm = code.strip().lower().replace("_", "-")
+    if norm in LANGUAGE_TYPES:
+        return LANGUAGE_TYPES[norm]
+    primary = norm.split("-", 1)[0]
+    return LANGUAGE_TYPES.get(primary, DEFAULT_LANGUAGE_TYPE)
+
+
+# The base "envelope" every client-api body carries. languageType is added
+# per-client (from the integration layer's locale) via ``_envelope``.
+_BASE_ENVELOPE = {
     "interfaceVersion": 20240918,
     "skey": "testskey",
     "clientType": 2,
     "phoneType": "Android",
-    "languageType": 0,
 }
 
 # RSA public key baked into the xBloom clients (1024-bit). Bodies of tu* calls
@@ -250,8 +271,18 @@ class XBloomCloudClient:
     :meth:`login`) without rebuilding the client.
     """
 
-    def __init__(self, session: aiohttp.ClientSession) -> None:
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        language_type: int = DEFAULT_LANGUAGE_TYPE,
+    ) -> None:
         self._session = session
+        self._language_type = language_type
+
+    def _envelope(self) -> dict:
+        """The base request envelope with this client's language applied."""
+        return {**_BASE_ENVELOPE, "languageType": self._language_type}
 
     # -- transport ---------------------------------------------------------- #
     async def _post_plain(self, endpoint: str, payload: dict) -> dict:
@@ -270,7 +301,7 @@ class XBloomCloudClient:
             return await resp.json(content_type=None)
 
     def _auth_body(self, member_id: int, token: str, **extra: Any) -> dict:
-        return {**_ENVELOPE, "memberId": member_id, "token": token, **extra}
+        return {**self._envelope(), "memberId": member_id, "token": token, **extra}
 
     # -- auth --------------------------------------------------------------- #
     async def login(self, email: str, password: str) -> dict:
@@ -278,7 +309,7 @@ class XBloomCloudClient:
 
         Raises :class:`XBloomAuthError` on a credential/format failure.
         """
-        payload = {**_ENVELOPE, "email": email, "password": password}
+        payload = {**self._envelope(), "email": email, "password": password}
         try:
             resp = await self._post_plain("tMemberLogin.thtml", payload)
         except aiohttp.ClientError as err:
@@ -385,7 +416,7 @@ class XBloomCloudClient:
         ``{version, download_url, md5, notes_en, notes_zh, force}`` on success,
         None if the backend has nothing for this serial.
         """
-        payload = {**_ENVELOPE, "serialNumber": serial_number, "adaptedModel": 1}
+        payload = {**self._envelope(), "serialNumber": serial_number, "adaptedModel": 1}
         try:
             resp = await self._post_plain(
                 "tUpToDateFirmwareVersion.thtml", payload

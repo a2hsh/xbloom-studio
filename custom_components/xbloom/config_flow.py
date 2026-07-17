@@ -169,7 +169,7 @@ class XBloomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Prompt for the password again and mint a fresh session token."""
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        from .vendor.xbloom.cloud import XBloomCloudClient
+        from .vendor.xbloom.cloud import XBloomCloudClient, language_type_for
         from .vendor.xbloom.exceptions import XBloomAPIError
 
         entry = self.hass.config_entries.async_get_entry(
@@ -185,7 +185,10 @@ class XBloomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not password:
                 errors["base"] = "credentials_required"
             else:
-                client = XBloomCloudClient(async_get_clientsession(self.hass))
+                client = XBloomCloudClient(
+                    async_get_clientsession(self.hass),
+                    language_type=language_type_for(self.hass.config.language),
+                )
                 try:
                     creds = await client.login(email, password)
                 except XBloomAPIError as err:
