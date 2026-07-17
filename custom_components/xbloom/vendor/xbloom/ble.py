@@ -545,6 +545,24 @@ def parse_ffe3_packet(data: bytes) -> dict | None:
     return {"code": code, "data_bytes": data_bytes, "data_float": data_float}
 
 
+def _ascii_field(payload: bytes, start: int, end: int) -> str | None:
+    """Decode a fixed-width ASCII field from a payload, fail-safe.
+
+    Returns the trimmed string, or None if the slice is short, empty, or not
+    printable ASCII. Used for the serial/model/firmware strings the machine
+    packs at the front of RD_MachineInfo — the offsets are inferred from the
+    Android MachineInfoBleModel layout, not a raw capture, so anything that
+    doesn't look like clean ASCII is discarded rather than shown as garbage.
+    """
+    if len(payload) < end:
+        return None
+    raw = payload[start:end].split(b"\x00", 1)[0]
+    text = raw.decode("ascii", "ignore").strip()
+    if not text or not all(32 <= ord(ch) < 127 for ch in text):
+        return None
+    return text
+
+
 def decode_notification(data: bytes) -> dict | None:
     """Higher-level decode: returns a flat dict ready for entity consumption.
 
@@ -553,6 +571,8 @@ def decode_notification(data: bytes) -> dict | None:
       * water_ml  (float)  — for water-volume notifications
       * activity  (int)    — for machine-activity (cmd 8023)
       * pour_index (int)   — for RD_BLOOM
+      * fw_version (str)   — installed firmware, from RD_MachineInfo
+      * serial / model (str) — machine identity, from RD_MachineInfo
     Returns None for non-5802 frames.
     """
     pkt = parse_ffe3_packet(data)
@@ -590,10 +610,29 @@ def decode_notification(data: bytes) -> dict | None:
     elif cmd == NOTIFY_MACHINE_INFO and len(payload) >= 35:
         # Periodic status heartbeat. Field offsets match the Android
         # MachineInfoBleModel parse (cross-confirmed by brAzzi64/xbloom-ble):
+        #   bytes 0..13  = serialNumber (ASCII)
+        #   bytes 13..19 = model (ASCII)
+        #   bytes 19..29 = theVersion / firmware (ASCII, e.g. "V12.0D.500")
         #   byte 33 = waterEnough (0 = low/needs water, 1 = ok)
         #   byte 34 = systemStatus (0/4 = idle/standby; other values undecoded)
         #   byte 37 = grinder size (raw - 30, min 1)
         #   byte 39 = voltage
+        # The identity strings (serial/model/firmware) sit at the front of the
+        # same payload; their offsets are inferred from the Android model (not a
+        # raw capture), so each is validated as printable ASCII and dropped if
+        # it doesn't look right — the live-confirmed numeric fields below are
+        # unaffected either way.
+        serial = _ascii_field(payload, 0, 13)
+        if serial:
+            out["serial"] = serial
+        model = _ascii_field(payload, 13, 19)
+        if model:
+            out["model"] = model
+        fw_version = _ascii_field(payload, 19, 29)
+        # A version string must contain a digit — guards against a shifted or
+        # zero-filled field decoding to something spurious.
+        if fw_version and any(ch.isdigit() for ch in fw_version):
+            out["fw_version"] = fw_version
         out["water_enough"] = payload[33]
         out["system_status"] = payload[34]
         if len(payload) >= 40:
