@@ -2,12 +2,14 @@
 
 **Unofficial**, local-only [Home Assistant](https://www.home-assistant.io/) custom integration for the **xBloom Studio** coffee machine, communicating over Bluetooth Low Energy (BLE).
 
-It gives you full control of the machine from Home Assistant — brew monitoring, recipe management, and standalone grinder / brewer / scale control — as entities, services, and automation blueprints. No cloud account, no polling; the machine is contacted over BLE on demand and released again so the official iOS app can still connect.
+It gives you full control of the machine from Home Assistant — brew monitoring, recipe management, and standalone grinder / brewer / scale control — as entities, services, and automation blueprints. Brewing and machine control are BLE-only: the machine is contacted over BLE on demand and released again so the official iOS app can still connect. An **optional** xBloom account login adds cloud recipe sync and a firmware-update check on top — everything works without it.
 
 ## Features
 
 - **Live brew monitoring** — brew status, machine status, scale weight, and per-pour progress stream over BLE while a brew is running.
 - **Recipe library** — store recipes locally in Home Assistant, import them from an xBloom share link, and create / edit / delete them from the integration's options flow.
+- **Optional cloud sync** — log in with your xBloom account to make the cloud the single source of truth for recipes: your account's recipes appear in Home Assistant, and create / edit / delete write straight back to the cloud (so they show up in the iOS app too). On first login, choose to upload your existing local recipes or discard them. Log out any time to fall back to the local library.
+- **Firmware update check** *(cloud, read-only)* — when logged in, a Firmware entity shows the latest firmware xBloom publishes for your machine, with release notes. Installing the update from Home Assistant is not yet supported (the flash still happens from the iOS app).
 - **One-tap brewing** — start, pause, resume, or cancel a brew; brew with pre-ground coffee; write a recipe to one of the machine's on-device slots.
 - **Standalone control** — run the grinder or brewer on their own, tare the scale, switch water source, and change on-screen units.
 - **Announcement blueprints** — ready-made automation blueprints that speak brew progress, live-control feedback, and machine faults through any TTS or notify service (e.g. Alexa).
@@ -37,7 +39,13 @@ Copy `custom_components/xbloom/` into your Home Assistant `config/custom_compone
 
 With the machine powered on and in range, Home Assistant discovers it automatically over Bluetooth (it advertises as `XBLOOM …`). You will see a discovered device under **Settings → Devices & Services** — confirm it to finish setup. If it is not discovered, use **Add Integration → xBloom Studio**.
 
-Recipes are managed after setup from the integration's **Configure** (options) menu: add from an xBloom share URL or share ID, or create, edit, and delete recipes by hand. The **Recipe** select entity always reflects the current local library.
+Recipes are managed after setup from the integration's **Configure** (options) menu: add from an xBloom share URL or share ID, or create, edit, and delete recipes by hand. The **Recipe** select entity always reflects the current library.
+
+### Optional: xBloom cloud login
+
+The same **Configure** menu has **Log in to xBloom cloud**. Sign in with your xBloom account email and password to sync recipes with the cloud — once logged in, the cloud becomes the single source of truth and every create / edit / delete is written back to your account. If you already have local recipes, you'll be asked whether to upload them to the cloud or discard them.
+
+Your email and password are stored locally in Home Assistant (in `.storage`, alongside the session token) so the session can refresh itself when the token expires; they are only ever sent to xBloom's login endpoint. Use **Log out of xBloom cloud** to clear them and return to the local library (your synced recipes stay cached locally). The cloud is entirely optional — leaving it out keeps the integration BLE-only.
 
 ## Entities
 
@@ -47,6 +55,7 @@ Recipes are managed after setup from the integration's **Configure** (options) m
 - **Numbers** — Grind Size, Grind Speed, Brew Volume, Brew Temperature, Brew Flow Rate.
 - **Buttons** — Start Brew, Cancel Brew, Pause Brew, Resume Brew, Tare Scale, Back to Home, Grind, Brew (standalone), Refresh Recipes, plus BLE Connect / BLE Disconnect diagnostics.
 - **Switches** — Use Grinder, Live Control.
+- **Update** — Firmware (read-only; available when logged in to the xBloom cloud).
 
 ## Services
 
