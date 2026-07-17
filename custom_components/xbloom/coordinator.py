@@ -264,6 +264,23 @@ class XBloomCoordinator(DataUpdateCoordinator):
             creds[CONF_CLOUD_PASSWORD] = password
         return creds
 
+    async def async_local_only_recipes(
+        self, member_id: int, token: str
+    ) -> list[dict]:
+        """Local recipes that are NOT already in the user's cloud library.
+
+        Compared by recipe id. This is what "your local recipes" really means at
+        login time: a recipe whose id already exists in the cloud is a cached
+        mirror from a previous session (a log-out/log-in round trip), not a
+        genuinely-local recipe — uploading it would duplicate it. A hand-made
+        local recipe (``local-…`` id) or a share-import (a foreign id) won't
+        match any cloud id, so it's correctly treated as local.
+        """
+        cloud = await self._cloud.list_recipes(member_id, token)
+        cloud_ids = {str(r.get("id")) for r in cloud}
+        local = await self.store.async_load()
+        return [r for r in local if str(r.get("id") or "") not in cloud_ids]
+
     async def async_finalize_login(
         self,
         *,
@@ -276,14 +293,15 @@ class XBloomCoordinator(DataUpdateCoordinator):
     ) -> None:
         """Persist credentials and reconcile the pre-existing local library.
 
-        ``upload_local`` True pushes every locally-stored recipe up to the cloud
-        first; False discards them. Either way the local ``Store`` is cleared —
-        the subsequent refresh repopulates it as a mirror of the cloud, which
-        becomes the single source of truth.
+        ``upload_local`` True pushes the genuinely-local recipes (those not
+        already in the cloud — see :meth:`async_local_only_recipes`) up to the
+        cloud; False discards the local library. Either way the local ``Store``
+        is cleared — the subsequent refresh repopulates it as a mirror of the
+        cloud, which becomes the single source of truth. Uploading only the
+        local-only set avoids duplicating a cached mirror on a re-login.
         """
         if upload_local:
-            local = await self.store.async_load()
-            for recipe in local:
+            for recipe in await self.async_local_only_recipes(member_id, token):
                 try:
                     await self._cloud.create_recipe(member_id, token, recipe)
                 except XBloomAPIError as err:

@@ -280,6 +280,7 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
         self._delete_target: dict | None = None
         self._post_save: dict | None = None
         self._pending_login: dict | None = None
+        self._reconcile_count: int = 0
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -333,10 +334,14 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
                         "token": creds["token"],
                         "remember": remember,
                     }
-                    # If there are local recipes, ask the user what to do with
-                    # them before switching the source of truth to the cloud.
-                    local = await coordinator.store.async_load()
-                    if local:
+                    # Only prompt about recipes that are genuinely local (not
+                    # already in the cloud). A pure cached mirror from a previous
+                    # session needs no reconciliation — switch straight over.
+                    local_only = await coordinator.async_local_only_recipes(
+                        creds["memberId"], creds["token"]
+                    )
+                    if local_only:
+                        self._reconcile_count = len(local_only)
                         return await self.async_step_cloud_reconcile()
                     await coordinator.async_finalize_login(
                         **self._pending_login, upload_local=False
@@ -361,14 +366,12 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
     async def async_step_cloud_reconcile(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """First login with local recipes present — upload them or discard them."""
+        """First login with genuinely-local recipes — upload or discard them."""
         assert self._pending_login is not None
-        coordinator = self.config_entry.runtime_data.coordinator
-        local = await coordinator.store.async_load()
         return self.async_show_menu(
             step_id="cloud_reconcile",
             menu_options=["cloud_upload", "cloud_replace"],
-            description_placeholders={"count": str(len(local))},
+            description_placeholders={"count": str(self._reconcile_count)},
         )
 
     async def async_step_cloud_upload(
