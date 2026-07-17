@@ -54,12 +54,18 @@ _HEADERS = {
 }
 
 # The base "envelope" every client-api body carries.
+# languageType controls the language of server-returned messages (e.g. error
+# text). Confirmed from the Android LanguageKey/LanguageType constants:
+#   0=English 1=French 2=German 3=Chinese(Simp) 4=Chinese(Trad)
+#   5=Korean 6=Japanese 7=Arabic
+# The xbloom-agent MCP hard-codes 1 (French); we send 0 so any surfaced/logged
+# API message is English. (It has no effect on recipe data.)
 _ENVELOPE = {
     "interfaceVersion": 20240918,
     "skey": "testskey",
     "clientType": 2,
     "phoneType": "Android",
-    "languageType": 1,
+    "languageType": 0,
 }
 
 # RSA public key baked into the xBloom clients (1024-bit). Bodies of tu* calls
