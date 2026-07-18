@@ -326,8 +326,15 @@ def build_brew_frames(recipe: dict) -> list[bytes]:
 # ---------------------------------------------------------------------------
 CMD_TARE          = 8500   # 0x2134 — zero the scale
 CMD_BACK_TO_HOME  = 8022   # 0x1F56 — return UI to home screen
-CMD_BREW_PAUSE    = 40518  # 0x9E46 — pause an in-flight brew
-CMD_BREW_RESUME   = 8021   # 0x1F55 — resume a paused brew (APP_BREWER_RESTART)
+# Full-process (recipe/auto) brew controls — confirmed from the Android app's
+# AppJ15AutoManager (pause/restart/stop), which drives exactly the kind of brew
+# start_brew runs. These are DISTINCT from the standalone-brewer controls
+# (APP_BREWER_PAUSE 8019 / APP_BREWER_RESTART 8021 / APP_BREWER_STOP 4507),
+# which apply to manual water pours, not a recipe. Pausing our recipe brew with
+# 40518 but resuming/stopping with the standalone codes was a mismatch.
+CMD_BREW_PAUSE    = 40518  # 0x9E46 — 全流程冲泡暂停 (full-process brew pause)
+CMD_BREW_RESUME   = 40524  # 0x9E4C — 暂停之后开始 (resume after pause)
+CMD_BREW_STOP     = 40519  # 0x9E47 — 全流程冲泡停止 (full-process brew stop)
 
 
 def packet_tare() -> bytes:

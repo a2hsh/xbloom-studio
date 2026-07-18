@@ -375,13 +375,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: XBloomConfigEntry) -> bo
         """Cancel an in-progress brew.
 
         First stop HA's own brew task (which releases the BLE link it was
-        holding and clears the duplicate-guard), then send APP_BREWER_STOP
-        (4507) so the machine halts too. Cancelling the task first is what
-        makes Cancel Brew a reliable reset: it frees the connection a stuck
-        brew was holding, so the stop frame — and the next start_brew — can
-        get their own connection.
+        holding and clears the duplicate-guard), then send the full-process
+        brew stop (CMD_BREW_STOP 40519) so the machine halts the recipe too.
+        (40519 is the recipe/auto stop from AppJ15AutoManager; the standalone
+        brewer's APP_BREWER_STOP 4507 is a different command for manual pours.)
+        Cancelling the task first is what makes Cancel Brew a reliable reset: it
+        frees the connection a stuck brew was holding, so the stop frame — and
+        the next start_brew — can get their own connection.
         """
-        from .vendor.xbloom.ble import FFE1_UUID, XBloomBleClient, _build_frame
+        from .vendor.xbloom.ble import (
+            CMD_BREW_STOP, FFE1_UUID, XBloomBleClient, _build_frame,
+        )
 
         await _cancel_active_brew("stop_brew requested")
 
@@ -398,7 +402,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: XBloomConfigEntry) -> bo
         try:
             ble_client = XBloomBleClient(ble_device)
             async with ble_client:
-                stop_frame = _build_frame(4507)  # APP_BREWER_STOP, no data
+                stop_frame = _build_frame(CMD_BREW_STOP)  # 40519 full-process stop
                 await ble_client._client.write_gatt_char(  # noqa: SLF001
                     FFE1_UUID, stop_frame, response=False,
                 )
