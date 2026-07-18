@@ -119,11 +119,15 @@ class XBloomBrewStatusBleSensor(RestoreSensor, SensorEntity):
         await super().async_added_to_hass()
         if (last := await self.async_get_last_sensor_data()) is not None:
             value = last.native_value
-            # BLE mode never emits "offline" (that's an MQTT-mode concept).
-            # When migrating an existing entry from MQTT to BLE, the restored
-            # value can still be "offline" — normalize to "idle" so we don't
-            # publish a state outside our options list.
-            self._attr_native_value = value if value in self._attr_options else "idle"
+            # A restored "grinding"/"brewing" is stale: on reload/restart there
+            # is no brew in progress that HA is tracking, so resurrecting a
+            # transient in-progress state wedges the UI (the dashboard hides
+            # Start while brewing). Normalize any in-progress or out-of-options
+            # value (e.g. MQTT-mode "offline") to "idle"; only a terminal "done"
+            # carries meaning across a restart.
+            if value not in self._attr_options or value in ("grinding", "brewing"):
+                value = "idle"
+            self._attr_native_value = value
 
         @callback
         def _on_event(decoded: dict) -> None:
@@ -170,9 +174,16 @@ class XBloomBrewStatusBleSensor(RestoreSensor, SensorEntity):
 
         @callback
         def _on_lifecycle(phase: str) -> None:
-            if phase == "started" and self._attr_native_value == "done":
-                # Reset to idle at the start of a new brew so subscribers
-                # see the transition.
+            if phase == "started" and self._attr_native_value != "idle":
+                # Reset to idle at the start of a new brew so subscribers see
+                # the transition — covers a prior "done" as well as a stale
+                # in-progress value left behind by an aborted brew.
+                self._attr_native_value = "idle"
+                self.async_write_ha_state()
+            elif phase == "ended" and self._attr_native_value in ("grinding", "brewing"):
+                # The brew task ended (completed, cancelled or errored) without
+                # a terminal event reaching us — clear the stuck in-progress
+                # state so the dashboard's Start button comes back.
                 self._attr_native_value = "idle"
                 self.async_write_ha_state()
 
