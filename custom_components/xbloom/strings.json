@@ -67,7 +67,7 @@
         }
       },
       "cloud_reconcile": {
-        "title": "You have {count} local recipe(s)",
+        "title": "You have local recipes",
         "description": "Once you log in, the xBloom cloud becomes the single source of truth for your recipes. What should happen to the {count} recipe(s) currently stored locally?",
         "menu_options": {
           "cloud_upload": "Upload my local recipes to the cloud",
