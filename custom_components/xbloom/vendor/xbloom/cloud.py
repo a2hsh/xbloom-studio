@@ -434,12 +434,37 @@ class XBloomCloudClient:
         force_raw = resp.get("isForceUpgrade", resp.get("is_force_upgrade"))
         return {
             "version": str(version),
+            "version_id": resp.get("versionId"),
             "download_url": resp.get("resourceLinks"),
             "md5": resp.get("md5_string"),
             "notes_en": resp.get("contentEN"),
             "notes_zh": resp.get("contentZH"),
             "force": force_raw == 1 or force_raw is True,
         }
+
+    async def report_machine_updated(
+        self, member_id: int, token: str, serial_number: str,
+        version: str, version_id: Any = None,
+    ) -> bool:
+        """Best-effort: tell the cloud the machine flashed a new firmware.
+
+        Purely cosmetic — it updates the version the cloud *displays* for the
+        machine; the flash itself is complete regardless. NOTE: the exact request
+        fields are UNCONFIRMED (the app's request body is RSA-encrypted in the
+        capture and MachineUpdateModel is stripped from the binary), so these are
+        best-guess; a failure here is harmless. Returns True on success.
+        """
+        body = {"serialNumber": serial_number, "theVersion": version}
+        if version_id is not None:
+            body["versionId"] = version_id
+        try:
+            resp = await self._post_encrypted(
+                "tuMachineUpdate.tuhtml", self._auth_body(member_id, token, **body)
+            )
+        except (XBloomAPIError, aiohttp.ClientError) as err:
+            log.debug("xbloom cloud: report machine update failed: %s", err)
+            return False
+        return resp.get("result") == "success"
 
 
 class XBloomCloudSession:

@@ -29,6 +29,7 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_BLE_NAME,
     CONF_CLOUD,
+    CONF_ENABLE_FLASHING,
     CONF_CLOUD_EMAIL,
     CONF_CLOUD_MEMBER_ID,
     CONF_CLOUD_PASSWORD,
@@ -301,8 +302,33 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
                 "delete_recipe",
                 "add_recipe",
                 cloud_option,
+                "firmware_flashing",
                 "done",
             ],
+        )
+
+    async def async_step_firmware_flashing(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Arm/disarm the firmware Install button (off by default)."""
+        entry = self.config_entry
+        current = bool(entry.data.get(CONF_ENABLE_FLASHING))
+        if user_input is not None:
+            enabled = bool(user_input.get("enable"))
+            self.hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_ENABLE_FLASHING: enabled}
+            )
+            # Reload so the Firmware entity's Install button reflects the change.
+            self.hass.async_create_task(
+                self.hass.config_entries.async_reload(entry.entry_id)
+            )
+            return self.async_create_entry(title="", data={"_flashing": enabled})
+
+        return self.async_show_form(
+            step_id="firmware_flashing",
+            data_schema=vol.Schema({
+                vol.Required("enable", default=current): selector.BooleanSelector(),
+            }),
         )
 
     # ------------------------------------------------------------------ #

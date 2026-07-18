@@ -19,3 +19,8 @@ CONF_CLOUD_MEMBER_ID = "member_id"  # member.tableId from the login response
 CONF_CLOUD_TOKEN = "token"          # session token for the recipe API
 CONF_CLOUD_REMEMBER = "remember"    # whether the password is stored for auto-refresh
 
+# Firmware flashing is off by default: the OTA transfer is validated byte-exact
+# against a real capture but not yet proven on live hardware, and a flash can
+# brick the machine. The Install button appears only once the user arms this.
+CONF_ENABLE_FLASHING = "enable_firmware_flashing"  # entry.data flag
+

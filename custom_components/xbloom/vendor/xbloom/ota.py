@@ -134,10 +134,23 @@ class XBloomOtaFlasher:
         *,
         progress: ProgressCb | None = None,
         ack_timeout: float = 8.0,
+        chunk_delay: float = 0.0,
+        block_settle: float = 0.0,
     ) -> None:
+        """
+        Args:
+            chunk_delay: seconds to pause between 16-byte writes. The right value
+                is transport-specific (BlueZ backpressures on its own → 0 is fine;
+                an ESPHome BLE proxy or a native ESP32 may need a few ms), so the
+                integration layer supplies it rather than the vendor hard-coding.
+            block_settle: seconds to pause after a block's writes before awaiting
+                its ACK (lets the machine finish reassembling before it replies).
+        """
         self._device = device
         self._progress = progress
         self._ack_timeout = ack_timeout
+        self._chunk_delay = chunk_delay
+        self._block_settle = block_settle
         self._client = None
         self._acks: asyncio.Queue[int] = asyncio.Queue()
         self._ready = asyncio.Event()
@@ -168,6 +181,8 @@ class XBloomOtaFlasher:
             await self._client.write_gatt_char(
                 OTA_DATA_UUID, payload[i:i + _ATT_CHUNK], response=False
             )
+            if self._chunk_delay:
+                await asyncio.sleep(self._chunk_delay)
 
     async def _await_ack(self) -> int:
         return await asyncio.wait_for(self._acks.get(), self._ack_timeout)
@@ -175,6 +190,8 @@ class XBloomOtaFlasher:
     async def _send_block(self, frame: bytes, *, retries: int = 2) -> None:
         for attempt in range(retries + 1):
             await self._write_chunked(frame)
+            if self._block_settle:
+                await asyncio.sleep(self._block_settle)
             try:
                 tok = await self._await_ack()
             except asyncio.TimeoutError:

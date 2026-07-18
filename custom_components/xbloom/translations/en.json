@@ -46,7 +46,15 @@
           "add_recipe": "Add a recipe by share URL",
           "cloud_login": "Log in to xBloom cloud",
           "cloud_logout": "Log out of xBloom cloud",
+          "firmware_flashing": "Firmware flashing (advanced)",
           "done": "Done"
+        }
+      },
+      "firmware_flashing": {
+        "title": "Enable firmware flashing",
+        "description": "Off by default. When on, the Firmware entity gets an Install button that flashes updates to the machine over Bluetooth. The transfer is validated byte-for-byte against a real xBloom update, but ⚠️ flashing firmware can brick the machine if the Bluetooth link drops mid-update, and this has not yet been tested on live hardware. Only enable it if you accept that risk.",
+        "data": {
+          "enable": "Enable firmware flashing"
         }
       },
       "cloud_login": {

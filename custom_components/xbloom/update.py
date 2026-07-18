@@ -35,7 +35,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .ble_entities import signal_event
-from .const import CONF_PRODUCT_ID, DOMAIN
+from .const import CONF_ENABLE_FLASHING, CONF_PRODUCT_ID, DOMAIN
 from .vendor.xbloom.exceptions import XBloomAPIError
 from .vendor.xbloom.ota import XBloomOtaError, XBloomOtaFlasher
 
@@ -44,6 +44,13 @@ _LOGGER = logging.getLogger(__name__)
 # Firmware releases are rare — poll the cloud gently for the latest version.
 SCAN_INTERVAL = timedelta(hours=6)
 PARALLEL_UPDATES = 0
+
+# BLE write pacing for the flash, supplied by this (HA) integration layer to the
+# vendor flasher. 0 relies on the BLE stack's own backpressure (correct on
+# BlueZ); a few ms is safer through an ESPHome BLE proxy. Conservative default;
+# tune here if a real flash is flaky on your setup.
+_OTA_CHUNK_DELAY_S = 0.004
+_OTA_BLOCK_SETTLE_S = 0.02
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -57,19 +64,26 @@ class XBloomFirmwareUpdate(UpdateEntity, RestoreEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "xbloom_firmware"
     _attr_unique_id = "xbloom_firmware"
-    _attr_supported_features = (
-        UpdateEntityFeature.INSTALL | UpdateEntityFeature.PROGRESS
-    )
 
     def __init__(self, entry) -> None:
         self._entry = entry
         self._serial = entry.data.get(CONF_PRODUCT_ID)
         self._latest: str | None = None
+        self._version_id = None
         self._release_summary: str | None = None
         self._release_url: str | None = None       # S3 .bin download URL
         self._md5: str | None = None
         self._was_logged_in = False
         self._flashing = False
+
+    @property
+    def supported_features(self) -> UpdateEntityFeature:
+        # Install appears only when the user has explicitly armed firmware
+        # flashing (off by default — the flash is validated byte-exact but not
+        # yet proven on live hardware, and can brick the machine).
+        if self._entry.data.get(CONF_ENABLE_FLASHING):
+            return UpdateEntityFeature.INSTALL | UpdateEntityFeature.PROGRESS
+        return UpdateEntityFeature(0)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -170,6 +184,7 @@ class XBloomFirmwareUpdate(UpdateEntity, RestoreEntity):
             self._latest = None
             return
         self._latest = info["version"]
+        self._version_id = info.get("version_id")
         self._release_summary = info.get("notes_en") or info.get("notes_zh")
         self._release_url = info.get("download_url")
         self._md5 = info.get("md5")
@@ -177,6 +192,12 @@ class XBloomFirmwareUpdate(UpdateEntity, RestoreEntity):
     # -- install ------------------------------------------------------------ #
     async def async_install(self, version, backup, **kwargs) -> None:
         """Download, verify, and flash the firmware over BLE."""
+        if not self._entry.data.get(CONF_ENABLE_FLASHING):
+            raise HomeAssistantError(
+                "Firmware flashing is disabled. Enable it in the integration's "
+                "Configure menu first (it's off by default because a flash can "
+                "brick the machine and isn't yet hardware-tested)."
+            )
         if self._flashing:
             raise HomeAssistantError("A firmware update is already in progress.")
         coordinator = self._entry.runtime_data.coordinator
@@ -212,7 +233,10 @@ class XBloomFirmwareUpdate(UpdateEntity, RestoreEntity):
 
         model = (self._serial or "J15")[:3] or "J15"
         try:
-            flasher = XBloomOtaFlasher(device, progress=_on_progress)
+            flasher = XBloomOtaFlasher(
+                device, progress=_on_progress,
+                chunk_delay=_OTA_CHUNK_DELAY_S, block_settle=_OTA_BLOCK_SETTLE_S,
+            )
             await flasher.flash(firmware, target, model)
         except XBloomOtaError as err:
             _LOGGER.error("xbloom firmware: flash failed: %s", err)
@@ -230,6 +254,14 @@ class XBloomFirmwareUpdate(UpdateEntity, RestoreEntity):
         self._entry.runtime_data.installed_fw_version = target
         _LOGGER.info("xbloom firmware: flash to %s completed", target)
         self.async_write_ha_state()
+
+        # Best-effort: tell the cloud the machine updated (cosmetic — unconfirmed
+        # fields, failure is harmless). Without it the cloud may keep showing the
+        # old version until the official app syncs.
+        if self._serial:
+            await coordinator.async_report_firmware_updated(
+                self._serial, target, self._version_id
+            )
 
     async def _download_and_verify(self) -> bytes:
         session = async_get_clientsession(self.hass)
