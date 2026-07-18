@@ -252,16 +252,14 @@ class XBloomFirmwareUpdate(UpdateEntity, RestoreEntity):
 
         # Optimistic; the machine's next heartbeat confirms the real version.
         self._entry.runtime_data.installed_fw_version = target
-        _LOGGER.info("xbloom firmware: flash to %s completed", target)
+        _LOGGER.info(
+            "xbloom firmware: flash to %s completed. The xBloom cloud still shows "
+            "the old version until you open the official app once — reporting it "
+            "ourselves would mean a full machine-settings sync (tuMachineUpdate) "
+            "that could clobber your cloud-stored settings, so we don't.",
+            target,
+        )
         self.async_write_ha_state()
-
-        # Best-effort: tell the cloud the machine updated (cosmetic — unconfirmed
-        # fields, failure is harmless). Without it the cloud may keep showing the
-        # old version until the official app syncs.
-        if self._serial:
-            await coordinator.async_report_firmware_updated(
-                self._serial, target, self._version_id
-            )
 
     async def _download_and_verify(self) -> bytes:
         session = async_get_clientsession(self.hass)

@@ -331,19 +331,3 @@ class XBloomCoordinator(DataUpdateCoordinator):
         """Clear cloud credentials; fall back to the local (mirrored) library."""
         self._save_creds(None)
         await self.async_request_refresh()
-
-    async def async_report_firmware_updated(
-        self, serial: str, version: str, version_id=None
-    ) -> bool:
-        """Best-effort: report a completed firmware flash to the cloud."""
-        creds = self._creds()
-        if not creds:
-            return False
-        try:
-            return await self._cloud.report_machine_updated(
-                creds[CONF_CLOUD_MEMBER_ID], creds[CONF_CLOUD_TOKEN],
-                serial, version, version_id,
-            )
-        except Exception:  # noqa: BLE001 — cosmetic; never fail the flash for it
-            _LOGGER.debug("xbloom cloud: firmware-update report skipped")
-            return False

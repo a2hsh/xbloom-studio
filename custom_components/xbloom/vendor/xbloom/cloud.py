@@ -442,29 +442,13 @@ class XBloomCloudClient:
             "force": force_raw == 1 or force_raw is True,
         }
 
-    async def report_machine_updated(
-        self, member_id: int, token: str, serial_number: str,
-        version: str, version_id: Any = None,
-    ) -> bool:
-        """Best-effort: tell the cloud the machine flashed a new firmware.
-
-        Purely cosmetic — it updates the version the cloud *displays* for the
-        machine; the flash itself is complete regardless. NOTE: the exact request
-        fields are UNCONFIRMED (the app's request body is RSA-encrypted in the
-        capture and MachineUpdateModel is stripped from the binary), so these are
-        best-guess; a failure here is harmless. Returns True on success.
-        """
-        body = {"serialNumber": serial_number, "theVersion": version}
-        if version_id is not None:
-            body["versionId"] = version_id
-        try:
-            resp = await self._post_encrypted(
-                "tuMachineUpdate.tuhtml", self._auth_body(member_id, token, **body)
-            )
-        except (XBloomAPIError, aiohttp.ClientError) as err:
-            log.debug("xbloom cloud: report machine update failed: %s", err)
-            return False
-        return resp.get("result") == "success"
+    # NOTE: there is deliberately no "report firmware version to cloud" here.
+    # The endpoint for that (tuMachineUpdate) is, per the Android app's
+    # MachineUpdateForm, a FULL machine-settings sync keyed by the machine's
+    # tableId (name, grinder, units, water feed, pattern, theVersion, …) — the
+    # app always sends the machine's entire current state. Sending a partial
+    # payload risks clobbering the user's cloud-stored settings, so after a
+    # flash we let the official app sync the version instead.
 
 
 class XBloomCloudSession:
