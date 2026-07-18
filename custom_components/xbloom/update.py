@@ -166,7 +166,10 @@ class XBloomFirmwareUpdate(UpdateEntity, RestoreEntity):
             return
         _LOGGER.debug("xbloom firmware: machine reports installed version %s", version)
         self._entry.runtime_data.installed_fw_version = version
-        self.async_write_ha_state()
+        # The BLE notification can reach us off the event loop (bleak marshals
+        # via run_coroutine_threadsafe, but HA still flags a direct state write
+        # here as non-thread-safe). schedule_update_ha_state hops onto the loop.
+        self.schedule_update_ha_state()
 
     async def async_update(self) -> None:
         """Poll the cloud for the latest firmware for this machine."""
