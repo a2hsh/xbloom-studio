@@ -429,13 +429,16 @@ class XBloomCloudClient:
         version = resp.get("theVersion")
         if not version:
             return None
+        # isForceUpgrade uses xBloom's 1=yes / 2=no convention (confirmed in a
+        # live capture: a non-forced update returns 2) — NOT a truthy int.
+        force_raw = resp.get("isForceUpgrade", resp.get("is_force_upgrade"))
         return {
             "version": str(version),
             "download_url": resp.get("resourceLinks"),
             "md5": resp.get("md5_string"),
             "notes_en": resp.get("contentEN"),
             "notes_zh": resp.get("contentZH"),
-            "force": bool(resp.get("isForceUpgrade") or resp.get("is_force_upgrade")),
+            "force": force_raw == 1 or force_raw is True,
         }
 
 

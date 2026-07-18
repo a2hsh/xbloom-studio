@@ -9,7 +9,7 @@ It gives you full control of the machine from Home Assistant — brew monitoring
 - **Live brew monitoring** — brew status, machine status, scale weight, and per-pour progress stream over BLE while a brew is running.
 - **Recipe library** — store recipes locally in Home Assistant, import them from an xBloom share link, and create / edit / delete them from the integration's options flow.
 - **Optional cloud sync** — log in with your xBloom account to make the cloud the single source of truth for recipes: your account's recipes appear in Home Assistant — both your own ("My Recipes") and ones you saved from shared links ("Shared Recipes", tagged with a `shared` attribute) — and create / edit / delete write straight back to the cloud (so they show up in the iOS app too). On first login, choose to upload your existing local recipes or discard them. Log out any time to fall back to the local library.
-- **Firmware update check** *(cloud, read-only)* — when logged in, a Firmware entity compares your machine's installed firmware (read from the machine over Bluetooth) against the latest version xBloom publishes, and shows release notes. Installing the update from Home Assistant is not yet supported (the flash still happens from the iOS app).
+- **Firmware update** *(cloud + Bluetooth)* — when logged in, a Firmware entity compares your machine's installed firmware (read from the machine over Bluetooth) against the latest version xBloom publishes, with release notes. Pressing **Install** downloads the firmware from xBloom's servers, verifies its MD5, and flashes it to the machine over Bluetooth (the transfer is validated byte-for-byte against a real captured update and is acknowledged block-by-block). ⚠️ Firmware flashing is inherently risky — a dropped Bluetooth link mid-update can brick the machine. Keep the machine close and powered, and don't run it while brewing.
 - **One-tap brewing** — start, pause, resume, or cancel a brew; brew with pre-ground coffee; write a recipe to one of the machine's on-device slots.
 - **Standalone control** — run the grinder or brewer on their own, tare the scale, switch water source, and change on-screen units.
 - **Announcement blueprints** — ready-made automation blueprints that speak brew progress, live-control feedback, and machine faults through any TTS or notify service (e.g. Alexa).
@@ -57,7 +57,7 @@ Recipe sync is event-driven, not polled: changes you make in Home Assistant appl
 - **Numbers** — Grind Size, Grind Speed, Brew Volume, Brew Temperature, Brew Flow Rate.
 - **Buttons** — Start Brew, Cancel Brew, Pause Brew, Resume Brew, Tare Scale, Back to Home, Grind, Brew (standalone), Refresh Recipes, plus BLE Connect / BLE Disconnect diagnostics.
 - **Switches** — Use Grinder, Live Control.
-- **Update** — Firmware (read-only; available when logged in to the xBloom cloud).
+- **Update** — Firmware (installed vs latest, with an Install button; available when logged in to the xBloom cloud).
 
 ## Services
 
