@@ -793,6 +793,38 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
         return out
 
     # ------------------------------------------------------------------ #
+    # Recipe picker labels — shared by the edit and delete steps.         #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _recipe_id_labels(recipes: list[dict]) -> dict[Any, str]:
+        """Build the id → label map used by both the edit and delete pickers.
+
+        Two recipes can carry the same name — most often a downloaded (shared)
+        recipe sitting next to your own copy of it. A bare name is ambiguous,
+        and with a screen reader two identical option labels are impossible to
+        tell apart. So we make every label distinct and audible:
+
+        * shared/downloaded recipes get a trailing ``(shared)`` tag, and
+        * any labels that are *still* identical get a numeric ``(n)`` suffix.
+
+        Both pickers go through here so they can never drift apart again (the
+        old delete step listed duplicates with identical labels — D-?? ).
+        """
+        labels: dict[Any, str] = {}
+        seen: dict[str, int] = {}
+        for r in recipes:
+            rid = r.get("id")
+            if not rid:
+                continue
+            base = str(r.get("name") or rid)
+            if r.get("shared"):
+                base = f"{base} (shared)"
+            n = seen.get(base, 0) + 1
+            seen[base] = n
+            labels[rid] = base if n == 1 else f"{base} ({n})"
+        return labels
+
+    # ------------------------------------------------------------------ #
     # Edit flow — Phase 9 plan 05                                         #
     # ------------------------------------------------------------------ #
     async def async_step_edit_recipe(
@@ -807,16 +839,7 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
         if not recipes:
             return self.async_abort(reason="no_recipes")
 
-        id_to_label: dict[str, str] = {}
-        seen: dict[str, int] = {}
-        for r in recipes:
-            rid = r.get("id")
-            if not rid:
-                continue
-            base = r.get("name") or rid
-            n = seen.get(base, 0) + 1
-            seen[base] = n
-            id_to_label[rid] = base if n == 1 else f"{base} ({n})"
+        id_to_label = self._recipe_id_labels(recipes)
 
         if user_input is not None:
             table_id = user_input["recipe_id"]
@@ -884,7 +907,7 @@ class XBloomOptionsFlow(config_entries.OptionsFlow):
         if not recipes:
             return self.async_abort(reason="no_recipes")
 
-        id_to_label = {r["id"]: r.get("name", r["id"]) for r in recipes if r.get("id")}
+        id_to_label = self._recipe_id_labels(recipes)
 
         if user_input is not None:
             self._delete_target = {
